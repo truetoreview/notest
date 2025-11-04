@@ -3,7 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>S Pen to Web Prototype</title>
+    <title>Web Note: Multi-Page & Scaled Handwriting</title>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -13,29 +16,69 @@
             background-color: #f0f0f0;
         }
 
-        /* --- Left Panel: Main Note --- */
-        #note-area {
+        /* --- Global Layout --- */
+        #note-area, #drawing-panel {
             flex: 1;
             padding: 20px;
+        }
+
+        /* --- Left Panel: Main Note --- */
+        #note-area {
             background-color: white;
             box-shadow: 2px 0 5px rgba(0, 0, 0, 0.1);
+            display: flex;
+            flex-direction: column;
         }
 
-        #main-note {
-            width: 100%;
-            height: calc(100% - 40px);
-            padding: 10px;
+        .note-controls {
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        #pages-container {
+            flex-grow: 1;
+            overflow-y: auto;
+            padding: 10px 0;
             border: 1px solid #ccc;
-            resize: none;
-            font-size: 16px;
+            background-color: #f8f8f8;
         }
 
+        /* Styling for the editable pages */
+        .note-page {
+            min-height: 800px; /* Simulates a full page height */
+            padding: 20px;
+            margin: 10px auto;
+            width: 90%;
+            background-color: white;
+            box-shadow: 0 0 5px rgba(0, 0, 0, 0.1);
+            border: 1px solid #eee;
+            font-size: 16px;
+            /* Allow content to be edited */
+            outline: none; 
+        }
+
+        /* CRUCIAL: Styling for the SCALED handwritten image */
+        .note-page img {
+            max-height: 40px; /* Makes the big drawing look like small, inline text */
+            height: auto;
+            width: auto;
+            display: inline-block;
+            vertical-align: middle;
+            margin: 2px 4px;
+            border: none; 
+            /* Optional: Add a subtle border or background to differentiate it from text */
+            padding: 2px 4px;
+            background-color: #f0f0ff; 
+            border-radius: 3px;
+        }
+        
         /* --- Right Panel: Drawing Canvas --- */
         #drawing-panel {
             flex: 1;
             display: flex;
             flex-direction: column;
-            padding: 20px;
             background-color: #e9e9e9;
         }
 
@@ -43,7 +86,7 @@
             border: 2px solid #333;
             background-color: white;
             cursor: crosshair;
-            touch-action: none; /* Prevents scrolling/zooming while drawing on touch devices */
+            touch-action: none; 
         }
 
         .controls {
@@ -76,8 +119,18 @@
 
     <div id="note-area">
         <h2>📝 Main Note</h2>
-        <p>Type here, or use the panel on the right to insert handwritten text.</p>
-        <textarea id="main-note" placeholder="Start typing your notes..."></textarea>
+        
+        <div class="note-controls">
+            <button onclick="addNewPage()">+ New Page</button>
+            <button onclick="exportNoteToPDF()">Export as PDF</button>
+            <span id="page-indicator">Page 1 / 1</span>
+        </div>
+        
+        <div id="pages-container">
+            <div class="note-page" data-page-id="1" contenteditable="true">
+                Type here, or click to set the cursor, then use the panel on the right to insert scaled handwriting.
+            </div>
+        </div>
     </div>
 
     <div id="drawing-panel">
@@ -86,41 +139,45 @@
 
         <div class="controls">
             <button onclick="clearCanvas()">Clear Writing</button>
-            <button onclick="insertHandwritingAsImage()">Insert Drawing (Image)</button>
-            <span id="message"></span>
+            <button onclick="insertHandwritingAsImage()">Insert Scaled Drawing</button>
         </div>
-        <p><small>NOTE: This prototype inserts the drawing as an image. Real conversion requires complex OCR.</small></p>
+        <span id="message"></span>
+        <p><small>Write large on the canvas. It will insert as small, inline content.</small></p>
     </div>
 
     <script>
+        // --- Global Variables ---
         const canvas = document.getElementById('drawing-canvas');
         const ctx = canvas.getContext('2d');
-        const mainNote = document.getElementById('main-note');
+        const pagesContainer = document.getElementById('pages-container');
+        const pageIndicator = document.getElementById('page-indicator');
         const message = document.getElementById('message');
+        const { jsPDF } = window.jspdf;
 
         let isDrawing = false;
         let lastX = 0;
         let lastY = 0;
-
-        // 1. Setup Canvas Size
+        let currentPageId = 1;
+        let totalPages = 1;
+        
+        // --- Initial Canvas Setup ---
         function resizeCanvas() {
-            canvas.width = canvas.parentElement.clientWidth - 40; // Adjust for padding
-            canvas.height = canvas.parentElement.clientHeight - 180; // Adjust for header and controls
+            canvas.width = canvas.parentElement.clientWidth - 40; 
+            canvas.height = canvas.parentElement.clientHeight - 180; 
         }
         window.addEventListener('resize', resizeCanvas);
         resizeCanvas();
 
-        // 2. Drawing Setup
         ctx.lineWidth = 4;
         ctx.lineJoin = 'round';
         ctx.lineCap = 'round';
         ctx.strokeStyle = 'black';
 
-        // 3. Drawing Handlers (Mouse and Touch)
+        // --- Drawing Logic ---
         function startDrawing(e) {
             isDrawing = true;
             [lastX, lastY] = getCoords(e);
-            e.preventDefault(); // Prevent touch events from scrolling/zooming
+            e.preventDefault(); 
         }
 
         function draw(e) {
@@ -145,11 +202,9 @@
             const rect = canvas.getBoundingClientRect();
 
             if (e.touches && e.touches.length > 0) {
-                // Touch event
                 x = e.touches[0].clientX - rect.left;
                 y = e.touches[0].clientY - rect.top;
             } else {
-                // Mouse event
                 x = e.clientX - rect.left;
                 y = e.clientY - rect.top;
             }
@@ -166,32 +221,128 @@
         canvas.addEventListener('touchmove', draw);
         canvas.addEventListener('touchend', stopDrawing);
 
-        // 4. Control Functions
+        // --- Control Functions ---
         function clearCanvas() {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             message.textContent = 'Canvas cleared.';
         }
-
-        function insertHandwritingAsImage() {
-            // Get the data URL of the canvas (the image)
-            const dataURL = canvas.toDataURL('image/png');
-            
-            // In a real application, you'd send this to an OCR API.
-            // For this prototype, we'll simulate text insertion by adding a simple indicator.
-
-            // The best way to "insert" into a textarea is to add a marker.
-            const timestamp = new Date().toLocaleTimeString();
-            const textToInsert = `\n--- [Handwritten Image Inserted at ${timestamp}] ---`;
-
-            mainNote.value += textToInsert;
-            message.textContent = 'Drawing marker inserted into note!';
-            
-            // For a visually richer note (not a textarea), you'd insert an <img> tag.
-            
-            // Clear the canvas after insertion, mimicking the Samsung app behavior
-            clearCanvas();
+        
+        // Function to get the current cursor selection/range
+        function getSelectionRange() {
+            if (window.getSelection) {
+                const sel = window.getSelection();
+                if (sel.rangeCount) {
+                    return sel.getRangeAt(0);
+                }
+            }
+            return null;
         }
 
+        // Function to insert a node at the current cursor position
+        function insertNodeAtCursor(node, range) {
+            if (range) {
+                range.deleteContents();
+                range.insertNode(node);
+                
+                // Move the cursor immediately after the inserted element
+                range.setStartAfter(node);
+                range.setEndAfter(node);
+                const sel = window.getSelection();
+                sel.removeAllRanges();
+                sel.addRange(range);
+            }
+        }
+
+        function insertHandwritingAsImage() {
+            const dataURL = canvas.toDataURL('image/png');
+            
+            // 1. Create the scaled image element
+            const imgElement = document.createElement('img');
+            imgElement.src = dataURL;
+            
+            // 2. Get the current cursor selection
+            const range = getSelectionRange();
+            
+            if (!range) {
+                message.textContent = 'Please click inside the note area to set the cursor position!';
+                return;
+            }
+
+            // Check if the cursor is inside an editable page
+            const isInsideNote = range.commonAncestorContainer.closest('.note-page');
+            
+            if (isInsideNote) {
+                // 3. Insert the image at the cursor position (scaled by CSS)
+                insertNodeAtCursor(imgElement, range);
+                
+                message.textContent = 'Drawing inserted and scaled!';
+                clearCanvas();
+            } else {
+                message.textContent = 'Insertion failed: Cursor not in a note page.';
+            }
+        }
+
+        function addNewPage() {
+            totalPages++;
+            currentPageId = totalPages;
+
+            const newPage = document.createElement('div');
+            newPage.className = 'note-page';
+            newPage.dataset.pageId = currentPageId;
+            newPage.contentEditable = true;
+            newPage.innerHTML = 'New Page ' + currentPageId;
+
+            pagesContainer.appendChild(newPage);
+            pageIndicator.textContent = `Page ${currentPageId} / ${totalPages}`;
+            
+            // Scroll to the new page and focus
+            newPage.scrollIntoView({ behavior: 'smooth' });
+            newPage.focus();
+        }
+
+        function exportNoteToPDF() {
+            message.textContent = 'Generating PDF...';
+            
+            // Create a new jsPDF instance
+            const doc = new jsPDF('p', 'pt', 'a4');
+            const pages = document.querySelectorAll('.note-page');
+            
+            if (pages.length === 0) {
+                alert('No content to export.');
+                message.textContent = '';
+                return;
+            }
+
+            // Process each page element
+            pages.forEach((pageElement, index) => {
+                // Add a page break for all but the first page
+                if (index > 0) {
+                    doc.addPage();
+                }
+
+                // Convert the HTML content of the page (including images) to PDF content
+                doc.html(pageElement, {
+                    callback: function (doc) {
+                        if (index === pages.length - 1) {
+                            // Save the PDF after the last page is processed
+                            doc.save('My_Web_Note.pdf');
+                            message.textContent = 'PDF Exported!';
+                        }
+                    },
+                    x: 10,
+                    y: 10,
+                    width: 570, 
+                    windowWidth: 800 
+                });
+            });
+        }
+        
+        // Initial setup for current page tracking
+        const firstPage = document.querySelector('.note-page[data-page-id="1"]');
+        if (firstPage) {
+             firstPage.focus();
+        }
+        
     </script>
 </body>
-</html>
+                                                 </html>
